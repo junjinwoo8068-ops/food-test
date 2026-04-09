@@ -7,13 +7,13 @@ let mode = null;
 function startBarcodeMode() {
     mode = "barcode";
     startCamera();
-    alert("바코드를 스캔해주세요");
+    alert("바코드를 촬영하세요");
 }
 
 function startOcrMode() {
     mode = "ocr";
     startCamera();
-    alert("유통기한을 촬영해주세요");
+    alert("유통기한을 촬영하세요");
 }
 
 // -------------------------
@@ -22,17 +22,22 @@ function startCamera() {
 
     const video = document.getElementById("camera");
 
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-        .then(s => {
-            stream = s;
-            video.srcObject = stream;
-            video.play();
-            cameraOn = true;
-            document.getElementById("captureBtn").disabled = false;
-        })
-        .catch(() => {
-            alert("카메라 권한을 허용해주세요!");
-        });
+    navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    })
+    .then(s => {
+        stream = s;
+        video.srcObject = stream;
+        cameraOn = true;
+        document.getElementById("captureBtn").disabled = false;
+    })
+    .catch(() => {
+        alert("카메라 권한 허용 필요!");
+    });
 }
 
 function stopCamera() {
@@ -40,7 +45,6 @@ function stopCamera() {
         stream.getTracks().forEach(track => track.stop());
         stream = null;
     }
-
     document.getElementById("camera").srcObject = null;
     cameraOn = false;
     document.getElementById("captureBtn").disabled = true;
@@ -48,60 +52,55 @@ function stopCamera() {
 
 // -------------------------
 function captureImage() {
-    const video = document.getElementById("camera");
-
-    if (!cameraOn) {
-        alert("먼저 스캔 버튼을 눌러주세요!");
-        return;
-    }
-
-    if (!mode) {
+    if (!cameraOn || !mode) {
         alert("스캔 모드를 선택하세요!");
         return;
     }
 
+    const video = document.getElementById("camera");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+
+    // 🔥 이미지 전처리
+    ctx.filter = "contrast(200%) brightness(150%)";
     ctx.drawImage(video, 0, 0);
 
     // -------------------------
-    // 🔥 바코드 + API 연결
+    // 📌 바코드
     // -------------------------
     if (mode === "barcode") {
         const codeReader = new ZXing.BrowserBarcodeReader();
 
-        codeReader.decodeFromImage(undefined, canvas)
-            .then(result => {
-                const barcode = result.text;
-                console.log("바코드:", barcode);
+        const image = new Image();
+        image.src = canvas.toDataURL();
 
-                // 🔥 API 호출
-                fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.status === 1 && data.product.product_name) {
-                            document.getElementById("foodName").value = data.product.product_name;
-                            alert("상품명 자동 입력 완료!");
-                        } else {
-                            document.getElementById("foodName").value = barcode;
-                            alert("상품 정보를 찾을 수 없어 코드만 입력되었습니다. 이름을 수정해주세요!");
-                        }
-                    })
-                    .catch(() => {
-                        document.getElementById("foodName").value = barcode;
-                        alert("API 오류! 코드만 입력되었습니다.");
-                    });
-            })
-            .catch(() => {
-                alert("바코드 인식 실패 😢");
-            });
+        image.onload = () => {
+            codeReader.decodeFromImageElement(image)
+                .then(result => {
+                    const barcode = result.text;
+
+                    fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 1 && data.product.product_name) {
+                                document.getElementById("foodName").value =
+                                    data.product.product_name;
+                                alert("상품명 자동 입력 완료!");
+                            } else {
+                                document.getElementById("foodName").value = barcode;
+                                alert("상품 정보 없음");
+                            }
+                        });
+                })
+                .catch(() => alert("바코드 인식 실패"));
+        };
     }
 
     // -------------------------
-    // 🔥 OCR (날짜 선택 기능 포함)
+    // 📌 OCR
     // -------------------------
     else if (mode === "ocr") {
         const status = document.getElementById("statusMessage");
@@ -109,29 +108,34 @@ function captureImage() {
 
         Tesseract.recognize(canvas, 'eng+kor')
             .then(result => {
-                const text = result.data.text;
-                console.log(text);
+                let text = result.data.text;
+                text = text.replace(/\s/g, "");
 
-                const matches = text.match(/\d{4}[.\-\/]\d{2}[.\-\/]\d{2}/g);
+                // 🔥 다양한 날짜 형식 대응
+                const matches = text.match(
+                    /\d{2,4}[.\-\/년]\d{1,2}[.\-\/월]\d{1,2}/g
+                );
 
-                if (matches && matches.length > 0) {
-                    status.innerHTML = "<b>날짜를 선택하세요:</b><br>";
+                if (matches) {
+                    status.innerHTML = "날짜 선택:<br>";
 
                     matches.forEach(date => {
                         const btn = document.createElement("button");
                         btn.textContent = date;
-                        btn.style.margin = "5px";
-                        btn.style.width = "auto";
 
                         btn.onclick = () => {
-                            document.getElementById("expiryDate").value = date;
+                            const clean = date
+                                .replace(/년|월/g, "-")
+                                .replace(/[.\//]/g, "-");
+
+                            document.getElementById("expiryDate").value = clean;
                             status.innerHTML = "";
                         };
 
                         status.appendChild(btn);
                     });
                 } else {
-                    alert("유통기한 인식 실패 😢");
+                    alert("유통기한 인식 실패");
                     status.textContent = "";
                 }
             });
@@ -143,7 +147,6 @@ function captureImage() {
 // -------------------------
 function clearCamera() {
     stopCamera();
-    alert("촬영이 삭제되었습니다!");
 }
 
 // -------------------------
@@ -159,126 +162,164 @@ function getDday(expiryDate) {
     if (diff > 1) return `D-${diff}`;
     if (diff === 1) return "D-1 임박 ⚠️";
     if (diff === 0) return "D-0 오늘 ⚠️";
-    return "유통기한 지남 ❌";
+    return "❌ 만료됨 (빠른 시일 내에 처리하세요)";
 }
 
 // -------------------------
-async function addFood() {
-    const name = document.getElementById("foodName").value.trim();
-    const date = document.getElementById("expiryDate").value;
+function addFood() {
+    const name = foodName.value.trim();
+    const date = expiryDate.value;
 
-    if (!name || !date) {
-        alert("모두 입력하세요!");
-        return;
-    }
+    if (!name || !date) return alert("입력 필요");
 
-    await requestNotificationPermission();
+    // 🔥 알림 중복 방지를 위해 notified: false 추가
+    foods.push({ id: Date.now(), name, expiryDate: date, notified: false });
 
-    const food = {
-        id: Date.now(),
-        name,
-        expiryDate: date,
-        notified: false
-    };
-
-    foods.push(food);
-    saveFoods();
+    localStorage.setItem("foods", JSON.stringify(foods));
     renderFoodList();
-    checkExpiryNotifications();
+    checkExpiryNotifications(); // 🔥 추가하자마자 오늘 날짜인지 한번 체크
 
-    document.getElementById("foodName").value = "";
-    document.getElementById("expiryDate").value = "";
-
-    alert("추가 완료!");
+    foodName.value = "";
+    expiryDate.value = "";
 }
-
 // -------------------------
 function renderFoodList() {
     const list = document.getElementById("foodList");
     list.innerHTML = "";
 
-    foods.forEach(food => {
+    let sortedFoods = [...foods];
+
+    // 🔥 정렬 (임박 → 아래 → 만료 맨 아래)
+    sortedFoods.sort((a, b) => {
+        const today = new Date();
+        today.setHours(0,0,0,0);
+
+        const aDate = new Date(a.expiryDate);
+        const bDate = new Date(b.expiryDate);
+
+        aDate.setHours(0,0,0,0);
+        bDate.setHours(0,0,0,0);
+
+        const aDiff = Math.ceil((aDate - today) / (1000*60*60*24));
+        const bDiff = Math.ceil((bDate - today) / (1000*60*60*24));
+
+        // ❌ 만료된 건 아래로
+        if (aDiff < 0 && bDiff >= 0) return 1;
+        if (aDiff >= 0 && bDiff < 0) return -1;
+
+        // ⏳ 임박한 순 (작을수록 위)
+        return aDiff - bDiff;
+    });
+
+    let expiredSection = false;
+
+    sortedFoods.forEach(food => {
         const li = document.createElement("li");
+
+        const dday = getDday(food.expiryDate);
+
+        // 🔥 만료 구분선 추가
+        if (dday.includes("지남") && !expiredSection) {
+            const divider = document.createElement("li");
+            divider.innerHTML = "<hr><strong>❌ 유통기한 지난 식품</strong>";
+            list.appendChild(divider);
+            expiredSection = true;
+        }
+
+        // 🔥 색상 처리
+        let color = "black";
+        if (dday.includes("지남")) color = "red";
+        else if (dday.includes("임박") || dday.includes("오늘")) color = "orange";
+
         li.innerHTML = `
-            <div class="food-info">
+            <div class="food-info" style="color:${color}">
                 <span class="food-name">${food.name}</span>
                 <span class="food-date">${food.expiryDate}</span>
-                <span class="food-dday">${getDday(food.expiryDate)}</span>
+                <span class="food-dday">${dday}</span>
             </div>
             <button class="delete-btn" onclick="deleteFood(${food.id})">삭제</button>
         `;
+
         list.appendChild(li);
     });
 }
 
 function deleteFood(id) {
     foods = foods.filter(f => f.id !== id);
-    saveFoods();
+    localStorage.setItem("foods", JSON.stringify(foods));
     renderFoodList();
 }
 
 // -------------------------
-function saveFoods() {
-    localStorage.setItem("foods", JSON.stringify(foods));
-}
-
-function loadFoods() {
+window.onload = () => {
     const saved = localStorage.getItem("foods");
     if (saved) foods = JSON.parse(saved);
-}
 
+    document.getElementById("todayDate").textContent =
+        "오늘 날짜: " + new Date().toISOString().split("T")[0];
+
+    renderFoodList();
+};
 // -------------------------
+// 🔥 알림 관련 기능 추가
+// -------------------------
+
+// 1. 알림 권한 요청
 async function requestNotificationPermission() {
     if (!("Notification" in window)) return;
-
     if (Notification.permission !== "granted") {
         await Notification.requestPermission();
     }
 }
 
-
-
-function checkExpiryNotifications() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);// 기존 sendNotification 함수를 아래와 같이 교체하세요
+// 2. 모바일(서비스 워커)용 알림 전송 함수
 async function sendNotification(title, body) {
-    if (!("Notification" in window)) return;
-
-    if (Notification.permission === "granted") {
-        // 서비스 워커를 통해 알림 발송 (모바일 백그라운드 필수 방식)
+    if (Notification.permission === "granted" && 'serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.ready;
         registration.showNotification(title, {
             body: body,
-            icon: 'https://cdn-icons-png.flaticon.com/512/1554/1554401.png',
-            vibrate: [200, 100, 200], // 진동 패턴
-            badge: 'https://cdn-icons-png.flaticon.com/512/1554/1554401.png'
+            icon: 'https://cdn-icons-png.flaticon.com/512/1554/1554401.png', // 앱 아이콘 경로
+            vibrate: [200, 100, 200]
         });
     }
 }
+
+// 3. 유통기한 체크해서 알림 띄우기
+function checkExpiryNotifications() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let isModified = false;
 
     foods.forEach(food => {
         const expiry = new Date(food.expiryDate);
         expiry.setHours(0, 0, 0, 0);
 
+        // 오늘이 만료일이고, 아직 알림을 안 보낸(notified: false) 식품이라면
         if (expiry.getTime() === today.getTime() && !food.notified) {
-            sendNotification("유통기한 알림", `${food.name} 오늘까지!`);
-            food.notified = true;
+            sendNotification("유통기한 임박 ⚠️", `${food.name}의 유통기한이 오늘까지입니다!`);
+            food.notified = true; // 알림 발송 완료 처리
+            isModified = true;
         }
     });
 
-    saveFoods();
+    // 변경된 상태(알림 발송 여부)를 로컬스토리지에 다시 저장
+    if (isModified) {
+        localStorage.setItem("foods", JSON.stringify(foods));
+    }
 }
+window.onload = async () => {
+    const saved = localStorage.getItem("foods");
+    if (saved) foods = JSON.parse(saved);
 
-// -------------------------
-window.addEventListener("load", async () => {
     document.getElementById("todayDate").textContent =
         "오늘 날짜: " + new Date().toISOString().split("T")[0];
 
-    loadFoods();
     renderFoodList();
 
+    // 🔥 앱 실행 시 권한 요청 및 알림 체크
     await requestNotificationPermission();
     checkExpiryNotifications();
 
+    // 🔥 앱을 켜놓고 있을 때 1분마다 주기적으로 체크 (선택사항)
     setInterval(checkExpiryNotifications, 60000);
-});
+};
